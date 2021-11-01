@@ -1,0 +1,7 @@
+//arch = zynq; split = false; format = BIN
+the_ROM_image:
+{
+	[bootloader]C:\Users\0\Midget\FPGA\Semi_Ws\Zed_SPI_wrapper_ADAR\export\Zed_SPI_wrapper_ADAR\sw\Zed_SPI_wrapper_ADAR\boot\fsbl.elf
+	C:\Users\0\Midget\FPGA\Semi_Ws\Zed_SPI_wrapper_ADAR\hw\Zed_SPI_wrapper.bit
+	C:\Users\0\Midget\FPGA\Semi_Ws\ZED_ADAR_Core\Debug\ZED_ADAR_Core.elf
+}
