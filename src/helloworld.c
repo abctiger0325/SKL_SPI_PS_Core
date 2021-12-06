@@ -61,11 +61,15 @@
 #include "xscugic.h"
 #endif
 
-#define memAddress  0x43C00000
+//#define GPIOAddress  0x41200000
+#define mem0Address  0x43C00000
+#define mem1Address  0x43C10000
 #define regOffset0  0
 #define regOffset1  4
 #define regOffset2  8
 #define regOffset3	12
+#define regOffset4	16
+#define regOffset5	20
 
 #define Reset_bit   0x01
 #define DataIn_bit  0x02
@@ -73,7 +77,7 @@
 #define RdySend_bit 0x08
 #define Done_bit    0x80
 
-#define TEST_BUFFER_SIZE 1
+#define TEST_BUFFER_SIZE 5
 
 #ifdef XPAR_INTC_0_DEVICE_ID
 #define XUartPsHandler_IT		XIntc
@@ -97,8 +101,11 @@ uint8_t receBuff[12] = {0};
 uint8_t cmdBuff[64] = {0};
 uint8_t f_write = 0;
 uint8_t f_read = 0;
+uint8_t f_header = 0;
+uint8_t headerBuff[3] = {0};
 uint8_t r_StatusReg = 0;
 uint8_t writeCnt = 0;
+uint8_t receCounter = 0;
 
 
 int PS_Uart_Init(XUartPsHandler_IT* xuart_it,XUartPs* xuart, uint16_t DeviceID, uint16_t UartIntID);
@@ -174,9 +181,7 @@ int PS_Uart_Init(XUartPsHandler_IT* xuart_it,XUartPs* xuart, uint16_t DeviceID, 
 
 	XUartPs_SetOperMode(xuart, XUARTPS_OPER_MODE_NORMAL);
 
-	XUartPs_SetRecvTimeout(xuart, 8);
-
-	XUartPs_Recv(xuart, receBuff, TEST_BUFFER_SIZE);
+	XUartPs_SetRecvTimeout(xuart, 10);
 
 	return XST_SUCCESS;
 }
@@ -283,123 +288,89 @@ int PS_Uart_Receive_IT(XUartPsHandler_IT* xuart_it, XUartPs * xuart, uint16_t Ua
 		return XST_SUCCESS;
 }
 
-void Cmd_Handler(uint8_t* list){
-    if (strstr((char*)list,"Reset") != NULL){
-    	writeCnt = 0;
-    	f_write = 0;
-    	f_read = 0;
-        r_StatusReg |= Reset_bit;
-        Xil_Out32(memAddress+regOffset0,r_StatusReg);
-        regVerify = Xil_In32(memAddress+regOffset0);
-        while (regVerify & Reset_bit){
-            regVerify = Xil_In32(memAddress+regOffset0);
-        }
-        r_StatusReg = regVerify;
-        uint8_t msgBuff[] = "Reset --------- Done\n\r";
-        XUartPs_Send(&xuart1,msgBuff,sizeof(msgBuff));
+void Cmd_Handler(uint8_t* config,uint8_t* list){
+//	XUartPs_Send(&xuart1,config,3);
+	if (config[1] == 0x00 || config[1] == 0x01){
+		uint64_t memAddr;
+        switch(config[0]){
+			case 1:
+				memAddr = mem0Address;
+				break;
 
-    } else if (strstr((char*)list,"Write") != NULL){
-        f_write = 1;
-        uint8_t msgBuff[] = "Start Write Mode\n\r";
-        XUartPs_Send(&xuart1,msgBuff,sizeof(msgBuff));
+			case 'D':
+			case 'd':
+				memAddr = mem1Address;
+				break;
 
-    } else if (strstr((char*)list,"Send") != NULL){
-    	if (writeCnt == 0 || writeCnt % 3 != 0){
-            uint8_t msgBuff[40];
-            (writeCnt == 0)? strcpy((char*)msgBuff,"Error: Cannot Send Empty Buffer\n\r"): strcpy((char*)msgBuff,"Error: Cannot Send Uncompleted Buffer\n\r");
-            XUartPs_Send(&xuart1,msgBuff,sizeof(msgBuff));
-            return;
-        }
-        f_write = 0;
-        r_StatusReg |= RdySend_bit;
-        Xil_Out32(memAddress+regOffset0,r_StatusReg);
-        regVerify = Xil_In32(memAddress+regOffset0);
-        while (!(regVerify & Done_bit)){
-            regVerify = Xil_In32(memAddress+regOffset0);
-        }
-        regVerify &= 0x7F;
-        r_StatusReg = regVerify;
-        Xil_Out32(memAddress+regOffset0,r_StatusReg);
-        uint32_t r_Cnt = Xil_In32(memAddress+regOffset3);
-        uint8_t cntBuff[30];
-        sprintf((char*)cntBuff,"Count: %u",(unsigned int)r_Cnt);
-        XUartPs_Send(&xuart1,cntBuff,sizeof(cntBuff));
-        uint8_t msgBuff[] = "Data --------- Sent\n\rLeave Write Mode\n\r";
-        XUartPs_Send(&xuart1,msgBuff,sizeof(msgBuff));
-        writeCnt = 0;
-    } else if (strstr((char*)list,"Read") != NULL){
-    	f_read = 1;
-        uint8_t msgBuff[] = "Please input the Read Address (Hex)\n\r";
-        XUartPs_Send(&xuart1,msgBuff,sizeof(msgBuff));
-    } else if (list[0] == 'x'){
-    	if (f_write){
-			int value = strtol((char*)list+1,NULL,16);
-			Xil_Out32(memAddress+regOffset1,value);
+			default:
+				break;
+		}
+		for (int i = 0;i<headerBuff[2];i++){
+			Xil_Out32(memAddr+regOffset1,list[i]);
 			r_StatusReg |= DataIn_bit;
-			Xil_Out32(memAddress+regOffset0,r_StatusReg);
-			regVerify = Xil_In32(memAddress+regOffset0);
+			Xil_Out32(memAddr+regOffset0,r_StatusReg);
+			regVerify = Xil_In32(memAddr+regOffset0);
 			while (regVerify & DataIn_bit){
-				regVerify = Xil_In32(memAddress+regOffset0);
+				regVerify = Xil_In32(memAddr+regOffset0);
 			}
 	        r_StatusReg = regVerify;
-			uint8_t msgBuff[30];
-			sprintf((char*)msgBuff, "Written Buffer Data: 0x%02x\n\r",value);
-			writeCnt++;
-			XUartPs_Send(&xuart1,msgBuff,sizeof(msgBuff));
-    	} else if (f_read){
-			int value = strtol((char*)list+1,NULL,16);
-			uint8_t list[3];
-			list[0] = value >> 8;
-			list[0] |= 0x80;
-			list[1] = value & 0xFF;
-			list[2] = 0x00;
-			for (int i = 0;i<3;i++){
-				Xil_Out32(memAddress+regOffset1,list[i]);
-				r_StatusReg |= DataIn_bit;
-				Xil_Out32(memAddress+regOffset0,r_StatusReg);
-				regVerify = Xil_In32(memAddress+regOffset0);
-				while (regVerify & DataIn_bit){
-					regVerify = Xil_In32(memAddress+regOffset0);
-				}
-		        r_StatusReg = regVerify;
-			}
-	        r_StatusReg |= RdySend_bit | RdyRece_bit;
-	        Xil_Out32(memAddress+regOffset0,r_StatusReg);
-	        regVerify = Xil_In32(memAddress+regOffset0);
-	        while (!(regVerify & Done_bit)){
-	            regVerify = Xil_In32(memAddress+regOffset0);
-	        }
-//	        r_StatusReg = regVerify;
-	        regRead = Xil_In32(memAddress+regOffset2);
-	        regVerify &= 0x7B;
-	        r_StatusReg = regVerify;
-	        Xil_Out32(memAddress+regOffset0,r_StatusReg);
-	        f_read = 0;
-	        uint8_t msgBuff[33];
-	        sprintf((char*)msgBuff,"Register x%03x Read Value: x%03x\n\r",value,regRead);
-            XUartPs_Send(&xuart1,msgBuff,sizeof(msgBuff));
-    	} else {
-            uint8_t msgBuff[] = "Error: Invalid Input\n\r";
-            XUartPs_Send(&xuart1,msgBuff,sizeof(msgBuff));
-    	}
-    } else {
-        uint8_t msgBuff[] = "Error: Invalid Input\n\r";
-        XUartPs_Send(&xuart1,msgBuff,sizeof(msgBuff));
-    }
+		}
+
+        r_StatusReg |= RdySend_bit;
+        if (config[1] == 0x01)r_StatusReg |= RdyRece_bit;
+
+        Xil_Out32(memAddr+regOffset0,r_StatusReg);
+        regVerify = Xil_In32(memAddr+regOffset0);
+        while (!(regVerify & Done_bit)){
+            regVerify = Xil_In32(memAddr+regOffset0);
+        }
+
+        if (config[1] == 0x01){
+        	regRead = Xil_In32(memAddr+regOffset2);
+        	uint8_t r_Return[2];
+        	r_Return[0] = 0x02;
+        	r_Return[1] = regRead;
+        	XUartPs_Send(&xuart1,r_Return,2);
+        }
+
+        regVerify &= 0x7B;
+        r_StatusReg = regVerify;
+        Xil_Out32(memAddr+regOffset0,r_StatusReg);
+	} else if (config[1] == 0x03){
+		Xil_Out32(mem1Address+regOffset4,list[0]);
+	} else if (config[1] == 0x04){
+		int r_Cnt = 0;
+		r_Cnt = (uint16_t)(list[0] << 8) | list[1];
+		Xil_Out32(mem1Address+regOffset5,r_Cnt);
+	}
 }
 
 void X_Uart_ReceCplt_Handler(XUartPs * xuart){
-	XUartPs_Send(&xuart1,(uint8_t*)receBuff,1);
-	if (receBuff[0] == 0x0D){
-		XUartPs_Send(&xuart1,(uint8_t*)"\n\r",2);
-//		XUartPs_Send(&xuart1,cmdBuff,sizeof(cmdBuff));
-//		XUartPs_Send(&xuart1,(uint8_t*)"\n\r",2);
-		Cmd_Handler(cmdBuff);
-		memset(cmdBuff,0,strlen((char*)cmdBuff));
-	} else
-		strcat((char*)cmdBuff,(char*)receBuff);
+	if (!f_header){
+//		XUartPs_Send(&xuart1,(uint8_t*)"Ping",4);
+		f_header = 1;
+		receCounter = headerBuff[2];
+		switch(headerBuff[0]){
+			case 1:
+				Xil_Out32(mem0Address+regOffset3,receCounter);
+				break;
 
-	XUartPs_Recv(&xuart1, receBuff, TEST_BUFFER_SIZE);
+			case 'D':
+				Xil_Out32(mem1Address+regOffset3,receCounter);
+				break;
+
+			case 'G':
+			default:
+				break;
+		}
+		XUartPs_Recv(&xuart1, receBuff, receCounter);
+	} else {
+//		XUartPs_Send(&xuart1,(uint8_t*)"Bong",4);
+		f_header = 0;
+		Cmd_Handler(headerBuff,receBuff);
+		XUartPs_Recv(&xuart1, headerBuff, 3);
+		receCounter = 3;
+	}
 	// LEDPattern = 0xFF;
 
 }
@@ -408,12 +379,19 @@ void X_Uart_ReceCplt_Handler(XUartPs * xuart){
 void X_Uart_Interrupt_Handler(void *CallBackRef,uint32_t Event,unsigned int Data){
 	switch(Event){
 		case XUARTPS_EVENT_RECV_DATA:
-			if (Data == TEST_BUFFER_SIZE){
+//			XUartPs_Send(&xuart1,(uint8_t*)"Ding",4);
+			if (Data == receCounter){
 				X_Uart_ReceCplt_Handler(&xuart1);
 			}
 			break;
 
+		case XUARTPS_EVENT_RECV_TOUT:
+		case XUARTPS_EVENT_RECV_ERROR:
+//			XUartPs_Send(&xuart1,(uint8_t*)"Dong",4);
+			break;
+
 		default:
+
 			break;
 
 	}
@@ -423,24 +401,11 @@ int main()
 {
     init_platform();
     PS_Uart_Init(&xuart1_IT,&xuart1,UART_DEVICE_ID,UART_INT_IRQ_ID);
-    uint8_t initMsgBuFF[6][60] = {0};
-    strcpy((char*)initMsgBuFF[0],"ADAR Control Console\n\r");
-    strcpy((char*)initMsgBuFF[1],"Available Cmd:(Case Sensitive)\n\r");
-    strcpy((char*)initMsgBuFF[2],"1. Reset\n\r");
-    strcpy((char*)initMsgBuFF[3],"2. Write (Write Data Buffer - Format: x00 [hex value])\n\r");
-    strcpy((char*)initMsgBuFF[4],"3. Send (Send All Data in Buffer)\n\r");
-    strcpy((char*)initMsgBuFF[5],"4. Read (Address in Hex)\n\r");
-    for (int i = 0;i < 6;i++){
-        uint8_t* buffer;
-        buffer = initMsgBuFF[i];
-        XUartPs_Send(&xuart1,(uint8_t*)buffer,60);
-        sleep(1);
-        usleep(1000);
-    }
-    XUartPs_Send(&xuart1,(uint8_t*)"Hello\r\n",7);
+	XUartPs_Recv(&xuart1, headerBuff, 3);
+	receCounter = 3;
+    Xil_Out32(mem0Address+regOffset3,3);
 
-
-    // regVerify = Xil_In32(memAddress+regOffset2);
+    // regVerify = Xil_In32(mem0Address+regOffset2);
     // if (regVerify == 0x2345)
     // 	sprintf(printBuffer,"Verify Done Value: %04x\n\r",(unsigned int)regVerify);
     // else
@@ -451,8 +416,8 @@ int main()
     	// regValue = LEDPattern;
     	// regValue |= LEDMask << 8;
 
-    	// Xil_Out32(memAddress+regOffset0,regValue);
-    	// regVerify = Xil_In32(memAddress+regOffset1);
+    	// Xil_Out32(mem0Address+regOffset0,regValue);
+    	// regVerify = Xil_In32(mem0Address+regOffset1);
 
     	// LEDPattern = LEDPattern << 1;
     	// if (LEDPattern == 0) LEDPattern = 0x4;
